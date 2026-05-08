@@ -90,11 +90,27 @@ jobs:
         run: |
           set -euo pipefail
           API="https://api.github.com/repos/${GITOPS_REPO}/contents/${GITOPS_PATH}"
-          AUTH="Authorization: Bearer ${GITOPS_TOKEN}"
           ACCEPT="Accept: application/vnd.github+json"
 
+          # Diagnostic: prove which token format we have (without leaking it)
+          PFX=$(printf '%s' "${GITOPS_TOKEN}" | cut -c1-4)
+          LEN=${#GITOPS_TOKEN}
+          echo "Token prefix=${PFX}***  length=${LEN}"
+
+          # --no-netrc: ignore the runner's ~/.netrc (which actions/checkout
+          # populated with the workflow's GITHUB_TOKEN, NOT scoped to the
+          # gitops repo). -H Authorization should take precedence anyway, but
+          # be explicit.
+          echo "=== /user (token sanity) ==="
+          curl --no-netrc -s -o /tmp/me.json -w "HTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
+            https://api.github.com/user
+          jq -r '.login // .message' /tmp/me.json
+
           echo "=== GET current file (need SHA for update) ==="
-          HTTP=$(curl -s -o /tmp/current.json -w "%{http_code}" -H "$AUTH" -H "$ACCEPT" "$API?ref=main")
+          HTTP=$(curl --no-netrc -s -o /tmp/current.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
+            "$API?ref=main")
           if [ "$HTTP" != "200" ]; then
             echo "GET failed (HTTP $HTTP):"
             cat /tmp/current.json
@@ -128,5 +144,6 @@ jobs:
               committer: {name: $name, email: $email},
               author:    {name: $name, email: $email}}' > /tmp/payload.json
 
-          curl -sfX PUT -H "$AUTH" -H "$ACCEPT" \
+          curl --no-netrc -sfX PUT \
+            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
             -d @/tmp/payload.json "$API" | jq '{commit: .commit.html_url, content_sha: .content.sha}'
