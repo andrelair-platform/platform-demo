@@ -91,7 +91,7 @@ jobs:
           # API-based default-branch lookup which was failing with
           # "Bad credentials" on this fine-grained PAT.
           git clone --depth 1 --branch main \
-            "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" \
+            "https://oauth2:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" \
             gitops
           # Smoke-test that we can read the file we'll edit
           ls -la gitops/${GITOPS_PATH}
@@ -129,4 +129,4 @@ jobs:
           # intercepts `git push` and provides the WORKFLOW's GITHUB_TOKEN —
           # which doesn't have access to the gitops repo. Passing the URL
           # with the right token bypasses the helper entirely.
-          git push "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" main
+          git push "https://oauth2:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" main
