@@ -114,8 +114,5 @@ jobs:
           fi
 
           git add "${GITOPS_PATH}"
-          git commit -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }}
-
-Built from ${{ github.repository }}@${{ github.sha }}
-by CI run ${{ github.run_id }}."
+          git commit -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }} (from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }})"
           git push origin main
