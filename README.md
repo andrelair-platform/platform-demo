@@ -2,6 +2,22 @@
 
 Tiny Go HTTP service used to demonstrate the **minicloud CI/CD pipeline**:
 
+**Live docs:** <https://andrelair-platform.github.io/minicloud-platform-docs/>
+— see [Phase 13 — CI/CD Pipeline](https://andrelair-platform.github.io/minicloud-platform-docs/platform-roadmap/phase-13-cicd) for the
+architectural decisions (GHA over GitLab, ghcr.io over Harbor, classic PAT
+over fine-grained) and the full debugging walkthrough.
+
+**Sibling repos in the [andrelair-platform](https://github.com/andrelair-platform) org:**
+[docs](https://github.com/andrelair-platform/minicloud-platform-docs) ·
+[ansible](https://github.com/andrelair-platform/minicloud-ansible) ·
+[opentofu](https://github.com/andrelair-platform/minicloud-opentofu) ·
+[gitops](https://github.com/andrelair-platform/minicloud-gitops)
+
+---
+
+## How it works
+
+
 ```
 push to main  →  GitHub Actions  →  build container  →  ghcr.io
                                                           │
