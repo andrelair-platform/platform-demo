@@ -110,6 +110,8 @@ jobs:
 
       - name: Commit and push
         working-directory: gitops
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
         run: |
           git config user.name  "platform-demo CI"
           git config user.email "platform-demo-ci@andrelair-platform.users.noreply.github.com"
@@ -121,4 +123,10 @@ jobs:
 
           git add "${GITOPS_PATH}"
           git commit -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }} (from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }})"
-          git push origin main
+
+          # Push to the token-authenticated URL explicitly. The runner has a
+          # global credential helper from earlier actions/checkout calls that
+          # intercepts `git push` and provides the WORKFLOW's GITHUB_TOKEN —
+          # which doesn't have access to the gitops repo. Passing the URL
+          # with the right token bypasses the helper entirely.
+          git push "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" main
