@@ -93,24 +93,10 @@ jobs:
           AUTH="Authorization: Bearer ${GITOPS_TOKEN}"
           ACCEPT="Accept: application/vnd.github+json"
 
-          echo "=== Token sanity check: who am I (api/user) and what scopes do I have ==="
-          curl -s -o /tmp/me.json -w "HTTP %{http_code}\n" -H "$AUTH" -H "$ACCEPT" \
-            https://api.github.com/user
-          echo "  /user response:"
-          head -c 600 /tmp/me.json; echo
-
-          echo ""
-          echo "=== Check repo access (api/repos/...) ==="
-          curl -s -o /tmp/repo.json -w "HTTP %{http_code}\n" -H "$AUTH" -H "$ACCEPT" \
-            "https://api.github.com/repos/${GITOPS_REPO}"
-          jq '{name, full_name, permissions, default_branch}' /tmp/repo.json 2>&1 | head -20
-
-          echo ""
           echo "=== GET current file (need SHA for update) ==="
           HTTP=$(curl -s -o /tmp/current.json -w "%{http_code}" -H "$AUTH" -H "$ACCEPT" "$API?ref=main")
-          echo "HTTP $HTTP"
           if [ "$HTTP" != "200" ]; then
-            echo "GET failed:"
+            echo "GET failed (HTTP $HTTP):"
             cat /tmp/current.json
             exit 1
           fi
