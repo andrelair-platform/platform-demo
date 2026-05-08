@@ -76,57 +76,52 @@ jobs:
   bump-gitops:
     needs: build-and-push
     runs-on: ubuntu-latest
+    env:
+      NEW_IMAGE: ghcr.io/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
-          yq --version
 
-      - name: Clone gitops repo directly (skip actions/checkout API calls)
+      - name: Update file via GitHub Contents API
         env:
           GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
         run: |
-          # Direct clone with token in URL — bypasses actions/checkout's
-          # API-based default-branch lookup which was failing with
-          # "Bad credentials" on this fine-grained PAT.
-          git clone --depth 1 --branch main \
-            "https://oauth2:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" \
-            gitops
-          # Smoke-test that we can read the file we'll edit
-          ls -la gitops/${GITOPS_PATH}
+          set -euo pipefail
+          API="https://api.github.com/repos/${GITOPS_REPO}/contents/${GITOPS_PATH}"
+          AUTH="Authorization: Bearer ${GITOPS_TOKEN}"
+          ACCEPT="Accept: application/vnd.github+json"
 
-      - name: Bump image tag
-        working-directory: gitops
-        env:
-          NEW_IMAGE: ghcr.io/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
-        run: |
-          echo "Updating ${GITOPS_PATH} -> ${NEW_IMAGE}"
-          # surgical edit: only the first container's image field
-          yq -i '(.spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' \
-            "${GITOPS_PATH}"
-          echo "--- diff ---"
-          git diff "${GITOPS_PATH}"
+          echo "=== GET current file (need SHA for update) ==="
+          curl -sf -H "$AUTH" -H "$ACCEPT" "$API?ref=main" -o /tmp/current.json
+          jq '{path, sha, encoding, size}' /tmp/current.json
+          OLD_SHA=$(jq -r .sha /tmp/current.json)
 
-      - name: Commit and push
-        working-directory: gitops
-        env:
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
-        run: |
-          git config user.name  "platform-demo CI"
-          git config user.email "platform-demo-ci@andrelair-platform.users.noreply.github.com"
+          echo "=== Decode + edit content ==="
+          jq -r .content /tmp/current.json | base64 -d > /tmp/current.yaml
+          yq -i '(.spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' /tmp/current.yaml
+          NEW_B64=$(base64 -w0 /tmp/current.yaml)
 
-          if git diff --quiet "${GITOPS_PATH}"; then
-            echo "No change in ${GITOPS_PATH} — image already at ${{ needs.build-and-push.outputs.image_tag }}, nothing to commit."
+          echo "=== Has the image actually changed? ==="
+          if [ "$(jq -r .content /tmp/current.json | tr -d '\n')" = "$NEW_B64" ]; then
+            echo "No change — image already at ${{ needs.build-and-push.outputs.image_tag }}"
             exit 0
           fi
 
-          git add "${GITOPS_PATH}"
-          git commit -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }} (from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }})"
+          MSG="ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }} (from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }})"
 
-          # Push to the token-authenticated URL explicitly. The runner has a
-          # global credential helper from earlier actions/checkout calls that
-          # intercepts `git push` and provides the WORKFLOW's GITHUB_TOKEN —
-          # which doesn't have access to the gitops repo. Passing the URL
-          # with the right token bypasses the helper entirely.
-          git push "https://oauth2:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" main
+          echo "=== PUT new content ==="
+          jq -n \
+            --arg msg "$MSG" \
+            --arg content "$NEW_B64" \
+            --arg sha "$OLD_SHA" \
+            --arg branch main \
+            --arg name "platform-demo CI" \
+            --arg email "platform-demo-ci@andrelair-platform.users.noreply.github.com" \
+            '{message: $msg, content: $content, sha: $sha, branch: $branch,
+              committer: {name: $name, email: $email},
+              author:    {name: $name, email: $email}}' > /tmp/payload.json
+
+          curl -sfX PUT -H "$AUTH" -H "$ACCEPT" \
+            -d @/tmp/payload.json "$API" | jq '{commit: .commit.html_url, content_sha: .content.sha}'
