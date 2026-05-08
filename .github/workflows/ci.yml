@@ -83,12 +83,18 @@ jobs:
           sudo chmod +x /usr/local/bin/yq
           yq --version
 
-      - name: Checkout gitops repo (write access via GITOPS_TOKEN)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ env.GITOPS_REPO }}
-          token: ${{ secrets.GITOPS_TOKEN }}
-          path: gitops
+      - name: Clone gitops repo directly (skip actions/checkout API calls)
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          # Direct clone with token in URL — bypasses actions/checkout's
+          # API-based default-branch lookup which was failing with
+          # "Bad credentials" on this fine-grained PAT.
+          git clone --depth 1 --branch main \
+            "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" \
+            gitops
+          # Smoke-test that we can read the file we'll edit
+          ls -la gitops/${GITOPS_PATH}
 
       - name: Bump image tag
         working-directory: gitops
