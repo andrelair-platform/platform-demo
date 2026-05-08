@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}   # andrelair-platform/platform-demo
+  GITOPS_REPO: andrelair-platform/minicloud-gitops
+  GITOPS_PATH: manifests/platform-demo/00-deployment.yaml
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: Run tests
+        run: go test -v ./...
+
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push to ghcr.io
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # ldflags need full git history for short SHA
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          FULL=$(git rev-parse HEAD)
+          echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
+          echo "version=${SHA}"   >> "$GITHUB_OUTPUT"
+          echo "commit=${FULL}"   >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ steps.meta.outputs.commit }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  bump-gitops:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Checkout gitops repo (write access via GITOPS_TOKEN)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+          path: gitops
+
+      - name: Bump image tag
+        working-directory: gitops
+        env:
+          NEW_IMAGE: ghcr.io/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          echo "Updating ${GITOPS_PATH} -> ${NEW_IMAGE}"
+          # surgical edit: only the first container's image field
+          yq -i '(.spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' \
+            "${GITOPS_PATH}"
+          echo "--- diff ---"
+          git diff "${GITOPS_PATH}"
+
+      - name: Commit and push
+        working-directory: gitops
+        run: |
+          git config user.name  "platform-demo CI"
+          git config user.email "platform-demo-ci@andrelair-platform.users.noreply.github.com"
+
+          if git diff --quiet "${GITOPS_PATH}"; then
+            echo "No change in ${GITOPS_PATH} — image already at ${{ needs.build-and-push.outputs.image_tag }}, nothing to commit."
+            exit 0
+          fi
+
+          git add "${GITOPS_PATH}"
+          git commit -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }}
+
+Built from ${{ github.repository }}@${{ github.sha }}
+by CI run ${{ github.run_id }}."
+          git push origin main
