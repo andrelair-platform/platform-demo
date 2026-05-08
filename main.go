@@ -23,6 +23,7 @@ type response struct {
 	Hostname  string `json:"hostname"`
 	GoVersion string `json:"goVersion"`
 	Now       string `json:"now"`
+	Message   string `json:"message"`
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 		Hostname:  hostname,
 		GoVersion: runtime.Version(),
 		Now:       time.Now().UTC().Format(time.RFC3339),
+		Message:   "deployed end-to-end via GitHub Actions + ghcr.io + ArgoCD GitOps",
 	})
 }
 
