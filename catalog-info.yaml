@@ -1,0 +1,46 @@
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: platform-demo
+  description: |
+    Phase 13 — tiny Go HTTP service used to demonstrate the full
+    minicloud CI/CD pipeline end-to-end. Source pushed → GitHub Actions
+    builds + tests + pushes to ghcr.io → CI bumps the image tag in
+    minicloud-gitops via the Contents API → ArgoCD reconciles → kubelet
+    pulls through Harbor's ghcr proxy cache (Phase 16). Total push-to-
+    live: ~3 min. Live at platform-demo.10.0.0.200.nip.io with
+    ldflags-injected git SHA in the JSON response.
+  annotations:
+    backstage.io/source-location: url:https://github.com/andrelair-platform/platform-demo
+    github.com/project-slug: andrelair-platform/platform-demo
+    argocd/app-name: platform-demo
+    prometheus.io/rule: http_request_duration_seconds_count{namespace="gitops-demo"}
+    grafana/dashboard-selector: namespace=gitops-demo
+  tags:
+    - go
+    - service
+    - demo
+    - phase-13
+    - cicd
+  links:
+    - url: https://platform-demo.10.0.0.200.nip.io/
+      title: Live service (returns JSON with git SHA)
+      icon: web
+    - url: https://andrelair-platform.github.io/minicloud-platform-docs/platform-roadmap/phase-13-cicd
+      title: Phase 13 documentation
+      icon: docs
+    - url: https://argocd.10.0.0.200.nip.io/applications/platform-demo
+      title: ArgoCD Application
+      icon: dashboard
+    - url: https://github.com/andrelair-platform/platform-demo
+      title: Source code
+      icon: github
+    - url: https://github.com/andrelair-platform/platform-demo/pkgs/container/platform-demo
+      title: Container images on ghcr.io
+      icon: image
+spec:
+  type: service
+  lifecycle: production
+  owner: andrelair-platform
+  system: minicloud-platform
