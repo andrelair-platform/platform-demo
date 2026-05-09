@@ -77,7 +77,11 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     env:
-      NEW_IMAGE: ghcr.io/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
+      # Phase 16: cluster pulls go through Harbor's ghcr proxy cache,
+      # not directly from ghcr.io. The image is still pushed to ghcr.io
+      # by the build-and-push job above; Harbor pulls + caches on
+      # demand when kubelet asks for it via this URL.
+      NEW_IMAGE: harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Install yq
         run: |
