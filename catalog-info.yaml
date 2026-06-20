@@ -15,6 +15,7 @@ metadata:
     backstage.io/source-location: url:https://github.com/andrelair-platform/platform-demo
     github.com/project-slug: andrelair-platform/platform-demo
     argocd/app-name: platform-demo
+    backstage.io/kubernetes-id: platform-demo
     prometheus.io/rule: http_request_duration_seconds_count{namespace="gitops-demo"}
     grafana/dashboard-selector: namespace=gitops-demo
   tags:
