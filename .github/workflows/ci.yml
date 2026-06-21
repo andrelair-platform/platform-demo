@@ -98,14 +98,26 @@ jobs:
             --type cyclonedx \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
+      - name: Install crane
+        run: |
+          curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
+            | tar -xz crane
+          sudo mv crane /usr/local/bin/
+
+      - name: Push to Harbor (cluster registry via Cloudflare Tunnel)
+        env:
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+          HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
+        run: |
+          crane auth login ${HARBOR_REGISTRY} -u admin -p ${HARBOR_PASSWORD}
+          crane copy \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }} \
+            ${HARBOR_REGISTRY}/ghcr/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+
   bump-gitops:
     needs: build-and-push
     runs-on: ubuntu-latest
     env:
-      # Phase 16: cluster pulls go through Harbor's ghcr proxy cache,
-      # not directly from ghcr.io. The image is still pushed to ghcr.io
-      # by the build-and-push job above; Harbor pulls + caches on
-      # demand when kubelet asks for it via this URL.
       NEW_IMAGE: harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Install yq
@@ -150,7 +162,7 @@ jobs:
 
           echo "=== Decode + edit content ==="
           jq -r .content /tmp/current.json | base64 -d > /tmp/current.yaml
-          yq -i '(.spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' /tmp/current.yaml
+          yq -i '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' /tmp/current.yaml
           NEW_B64=$(base64 -w0 /tmp/current.yaml)
 
           echo "=== Has the image actually changed? ==="
