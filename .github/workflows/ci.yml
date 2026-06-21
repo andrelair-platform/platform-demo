@@ -33,6 +33,7 @@ jobs:
     permissions:
       contents: read
       packages: write   # push to ghcr.io
+      id-token: write   # Cosign keyless signing — request GitHub OIDC token
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
@@ -59,6 +60,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -72,6 +74,29 @@ jobs:
             COMMIT=${{ steps.meta.outputs.commit }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Generate SBOM (CycloneDX JSON)
+        run: |
+          syft ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
+            -o cyclonedx-json=sbom.json
+
+      - name: Sign image (keyless — GitHub OIDC → Sigstore Fulcio)
+        run: |
+          cosign sign --yes \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+
+      - name: Attach SBOM to image as OCI referrer
+        run: |
+          cosign attach sbom \
+            --sbom sbom.json \
+            --type cyclonedx \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
   bump-gitops:
     needs: build-and-push
