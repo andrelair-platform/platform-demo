@@ -120,71 +120,32 @@ jobs:
     env:
       NEW_IMAGE: harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
+      - name: Checkout minicloud-gitops
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
       - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Update file via GitHub Contents API
-        env:
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+      - name: Bump image tag and push signed commit
         run: |
-          set -euo pipefail
-          API="https://api.github.com/repos/${GITOPS_REPO}/contents/${GITOPS_PATH}"
-          ACCEPT="Accept: application/vnd.github+json"
-
-          # Diagnostic: prove which token format we have (without leaking it)
-          PFX=$(printf '%s' "${GITOPS_TOKEN}" | cut -c1-4)
-          LEN=${#GITOPS_TOKEN}
-          echo "Token prefix=${PFX}***  length=${LEN}"
-
-          # --no-netrc: ignore the runner's ~/.netrc (which actions/checkout
-          # populated with the workflow's GITHUB_TOKEN, NOT scoped to the
-          # gitops repo). -H Authorization should take precedence anyway, but
-          # be explicit.
-          echo "=== /user (token sanity) ==="
-          curl --no-netrc -s -o /tmp/me.json -w "HTTP %{http_code}\n" \
-            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
-            https://api.github.com/user
-          jq -r '.login // .message' /tmp/me.json
-
-          echo "=== GET current file (need SHA for update) ==="
-          HTTP=$(curl --no-netrc -s -o /tmp/current.json -w "%{http_code}" \
-            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
-            "$API?ref=main")
-          if [ "$HTTP" != "200" ]; then
-            echo "GET failed (HTTP $HTTP):"
-            cat /tmp/current.json
-            exit 1
-          fi
-          jq '{path, sha, encoding, size}' /tmp/current.json
-          OLD_SHA=$(jq -r .sha /tmp/current.json)
-
-          echo "=== Decode + edit content ==="
-          jq -r .content /tmp/current.json | base64 -d > /tmp/current.yaml
-          yq -i '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' /tmp/current.yaml
-          NEW_B64=$(base64 -w0 /tmp/current.yaml)
-
-          echo "=== Has the image actually changed? ==="
-          if [ "$(jq -r .content /tmp/current.json | tr -d '\n')" = "$NEW_B64" ]; then
+          yq -i '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' \
+            "${{ env.GITOPS_PATH }}"
+          git add "${{ env.GITOPS_PATH }}"
+          if git diff --cached --quiet; then
             echo "No change — image already at ${{ needs.build-and-push.outputs.image_tag }}"
             exit 0
           fi
-
-          MSG="ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }} (from ${{ github.repository }}@${{ github.sha }}, run ${{ github.run_id }})"
-
-          echo "=== PUT new content ==="
-          jq -n \
-            --arg msg "$MSG" \
-            --arg content "$NEW_B64" \
-            --arg sha "$OLD_SHA" \
-            --arg branch main \
-            --arg name "platform-demo CI" \
-            --arg email "platform-demo-ci@andrelair-platform.users.noreply.github.com" \
-            '{message: $msg, content: $content, sha: $sha, branch: $branch,
-              committer: {name: $name, email: $email},
-              author:    {name: $name, email: $email}}' > /tmp/payload.json
-
-          curl --no-netrc -sfX PUT \
-            -H "Authorization: Bearer ${GITOPS_TOKEN}" -H "$ACCEPT" \
-            -d @/tmp/payload.json "$API" | jq '{commit: .commit.html_url, content_sha: .content.sha}'
+          git commit -S -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }}"
+          git push
