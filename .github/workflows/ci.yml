@@ -16,7 +16,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
@@ -37,7 +37,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # ldflags need full git history for short SHA
 
@@ -130,7 +130,7 @@ jobs:
       NEW_IMAGE: harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Checkout minicloud-gitops
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ env.GITOPS_REPO }}
           token: ${{ secrets.GITOPS_TOKEN }}
