@@ -10,7 +10,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}   # andrelair-platform/platform-demo
   GITOPS_REPO: andrelair-platform/minicloud-gitops
-  GITOPS_PATH: manifests/platform-demo/00-deployment.yaml
+  GITOPS_OVERLAY: services/platform-demo/overlays/dev
 
 jobs:
   test:
@@ -126,8 +126,6 @@ jobs:
   bump-gitops:
     needs: build-and-push
     runs-on: ubuntu-latest
-    env:
-      NEW_IMAGE: harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
     steps:
       - name: Checkout minicloud-gitops
         uses: actions/checkout@v4
@@ -142,19 +140,21 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      - name: Install yq
+      - name: Install kustomize
         run: |
-          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          curl -sSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
+          sudo mv kustomize /usr/local/bin/
 
-      - name: Bump image tag and push signed commit
+      - name: Bump image tag in dev overlay and push signed commit
         run: |
-          yq -i '(select(.kind == "Deployment") | .spec.template.spec.containers[] | select(.name == "platform-demo")).image = strenv(NEW_IMAGE)' \
-            "${{ env.GITOPS_PATH }}"
-          git add "${{ env.GITOPS_PATH }}"
+          cd "${{ env.GITOPS_OVERLAY }}"
+          kustomize edit set image \
+            harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
+          cd -
+          git add "${{ env.GITOPS_OVERLAY }}/kustomization.yaml"
           if git diff --cached --quiet; then
             echo "No change — image already at ${{ needs.build-and-push.outputs.image_tag }}"
             exit 0
           fi
-          git commit -S -m "ci(platform-demo): bump image to ${{ needs.build-and-push.outputs.image_tag }}"
+          git commit -S -m "ci(platform-demo): bump dev image to ${{ needs.build-and-push.outputs.image_tag }}"
           git push
