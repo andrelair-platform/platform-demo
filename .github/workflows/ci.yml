@@ -2,15 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging, dev]
   pull_request:
-    branches: [main]
+    branches: [main, staging]
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}   # andrelair-platform/platform-demo
+  IMAGE_NAME: ${{ github.repository }}
   GITOPS_REPO: andrelair-platform/minicloud-gitops
-  GITOPS_OVERLAY: services/platform-demo/overlays/dev
 
 jobs:
   test:
@@ -28,27 +27,36 @@ jobs:
 
   build-and-push:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write   # push to ghcr.io
-      id-token: write   # Cosign keyless signing — request GitHub OIDC token
+      packages: write
+      id-token: write
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
+      digest: ${{ steps.build.outputs.digest }}
+      branch: ${{ steps.meta.outputs.branch }}
+
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # ldflags need full git history for short SHA
+          fetch-depth: 0
 
       - name: Compute build metadata
         id: meta
         run: |
           SHA=$(git rev-parse --short HEAD)
-          FULL=$(git rev-parse HEAD)
-          echo "image_tag=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "version=${SHA}"   >> "$GITHUB_OUTPUT"
-          echo "commit=${FULL}"   >> "$GITHUB_OUTPUT"
+          BRANCH=${GITHUB_REF_NAME}
+          if [ "$BRANCH" = "main" ]; then
+            TAG="${SHA}"
+          else
+            TAG="${BRANCH}-${SHA}"
+          fi
+          echo "image_tag=${TAG}"         >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}"         >> "$GITHUB_OUTPUT"
+          echo "version=${SHA}"           >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -59,16 +67,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Build and push to ghcr.io
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Containerfile
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
             COMMIT=${{ steps.meta.outputs.commit }}
@@ -85,22 +91,27 @@ jobs:
           ignore-unfixed: true
 
       - name: Install Cosign
+        if: github.ref_name != 'dev'
         uses: sigstore/cosign-installer@v3
 
       - name: Install syft
+        if: github.ref_name == 'main'
         uses: anchore/sbom-action/download-syft@v0
 
       - name: Generate SBOM (CycloneDX JSON)
+        if: github.ref_name == 'main'
         run: |
           syft ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }} \
             -o cyclonedx-json=sbom.json
 
       - name: Sign image (keyless — GitHub OIDC → Sigstore Fulcio)
+        if: github.ref_name != 'dev'
         run: |
           cosign sign --yes \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
       - name: Attach SBOM to image as OCI referrer
+        if: github.ref_name == 'main'
         run: |
           cosign attach sbom \
             --sbom sbom.json \
@@ -127,6 +138,15 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
+      - name: Determine gitops overlay path
+        id: overlay
+        run: |
+          case "${{ needs.build-and-push.outputs.branch }}" in
+            main)    echo "path=services/platform-demo/overlays/prod" >> $GITHUB_OUTPUT ;;
+            staging) echo "path=services/platform-demo/overlays/staging" >> $GITHUB_OUTPUT ;;
+            dev)     echo "path=services/platform-demo/overlays/dev" >> $GITHUB_OUTPUT ;;
+          esac
+
       - name: Checkout minicloud-gitops
         uses: actions/checkout@v4
         with:
@@ -145,16 +165,16 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
           sudo mv kustomize /usr/local/bin/
 
-      - name: Bump image tag in dev overlay and push signed commit
+      - name: Bump image tag in overlay and push signed commit
         run: |
-          cd "${{ env.GITOPS_OVERLAY }}"
+          cd "${{ steps.overlay.outputs.path }}"
           kustomize edit set image \
             harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
           cd -
-          git add "${{ env.GITOPS_OVERLAY }}/kustomization.yaml"
+          git add "${{ steps.overlay.outputs.path }}/kustomization.yaml"
           if git diff --cached --quiet; then
             echo "No change — image already at ${{ needs.build-and-push.outputs.image_tag }}"
             exit 0
           fi
-          git commit -S -m "ci(platform-demo): bump dev image to ${{ needs.build-and-push.outputs.image_tag }}"
+          git commit -S -m "ci(platform-demo): bump ${{ needs.build-and-push.outputs.branch }} image to ${{ needs.build-and-push.outputs.image_tag }}"
           git push
