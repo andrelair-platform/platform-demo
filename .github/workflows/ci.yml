@@ -7,8 +7,8 @@ on:
     branches: [main, staging]
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  REGISTRY: harbor.10.0.0.200.nip.io
+  IMAGE_NAME: library/platform-demo
   GITOPS_REPO: andrelair-platform/minicloud-gitops
 
 jobs:
@@ -31,7 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
       id-token: write
     outputs:
       image_tag: ${{ steps.meta.outputs.image_tag }}
@@ -58,22 +57,42 @@ jobs:
           echo "version=${SHA}"           >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      # ── Tailscale: join the minicloud tailnet so we can reach Harbor ────────
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v3
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTH_KEY }}
+          version: latest
 
-      - name: Login to ghcr.io
+      # ── Trust the minicloud self-signed CA so Docker accepts Harbor TLS ────
+      - name: Trust minicloud CA
+        run: |
+          sudo mkdir -p /etc/docker/certs.d/${{ env.REGISTRY }}
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" | sudo tee /etc/docker/certs.d/${{ env.REGISTRY }}/ca.crt
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Login to Harbor
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: admin
+          password: ${{ secrets.HARBOR_PASSWORD }}
 
-      - name: Build and push to ghcr.io
+      - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor.10.0.0.200.nip.io"]
+              insecure = true
+
+      - name: Build and push to Harbor
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Containerfile
           push: true
+          platforms: linux/amd64
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
           build-args: |
             VERSION=${{ steps.meta.outputs.version }}
@@ -82,7 +101,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Scan image for vulnerabilities (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
           format: table
@@ -117,22 +136,6 @@ jobs:
             --sbom sbom.json \
             --type cyclonedx \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
-
-      - name: Install crane
-        run: |
-          curl -sSL https://github.com/google/go-containerregistry/releases/latest/download/go-containerregistry_Linux_x86_64.tar.gz \
-            | tar -xz crane
-          sudo mv crane /usr/local/bin/
-
-      - name: Push to Harbor (cluster registry via Cloudflare Tunnel)
-        env:
-          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
-          HARBOR_REGISTRY: ${{ secrets.HARBOR_REGISTRY }}
-        run: |
-          crane auth login ${HARBOR_REGISTRY} -u admin -p ${HARBOR_PASSWORD}
-          crane copy \
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }} \
-            ${HARBOR_REGISTRY}/ghcr/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
 
   bump-gitops:
     needs: build-and-push
@@ -169,7 +172,7 @@ jobs:
         run: |
           cd "${{ steps.overlay.outputs.path }}"
           kustomize edit set image \
-            harbor.10.0.0.200.nip.io/ghcr/${{ github.repository }}:${{ needs.build-and-push.outputs.image_tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
           cd -
           git add "${{ steps.overlay.outputs.path }}/kustomization.yaml"
           if git diff --cached --quiet; then
