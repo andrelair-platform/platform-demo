@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 # Multi-stage: golang builder -> gcr.io/distroless/static (smallest possible).
-FROM golang:1.23-alpine AS build
+FROM golang:1.25-alpine AS build
 WORKDIR /src
 
 # Cache deps separately
