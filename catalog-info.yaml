@@ -18,6 +18,7 @@ metadata:
     backstage.io/kubernetes-id: platform-demo
     prometheus.io/rule: http_request_duration_seconds_count{namespace="gitops-demo"}
     grafana/dashboard-selector: namespace=gitops-demo
+    plane.io/project-id: "PT"
   tags:
     - go
     - service
