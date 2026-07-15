@@ -46,3 +46,80 @@ spec:
   lifecycle: production
   owner: andrelair-platform
   system: minicloud-platform
+  providesApis:
+    - platform-demo-api
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: platform-demo-api
+  description: Minimal Go HTTP service demonstrating the full minicloud CI/CD pipeline. Returns build metadata as JSON.
+  annotations:
+    github.com/project-slug: andrelair-platform/platform-demo
+  tags:
+    - go
+    - rest
+    - demo
+spec:
+  type: openapi
+  lifecycle: production
+  owner: andrelair-platform
+  system: minicloud-platform
+  definition: |
+    openapi: "3.0.3"
+    info:
+      title: platform-demo API
+      version: "1.0.0"
+      description: >
+        Minimal Go service that demonstrates the minicloud CI/CD pipeline end-to-end.
+        Returns build metadata (version, git SHA, hostname) as JSON.
+    servers:
+      - url: https://demo.devandre.sbs
+        description: Public (via Cloudflare Tunnel)
+      - url: http://platform-demo.gitops-demo.svc.cluster.local:9898
+        description: In-cluster
+    paths:
+      /:
+        get:
+          summary: Build metadata
+          operationId: getMetadata
+          description: Returns app version, git commit SHA, hostname, Go version and current timestamp.
+          responses:
+            "200":
+              description: Build metadata
+              content:
+                application/json:
+                  schema:
+                    type: object
+                    properties:
+                      app:
+                        type: string
+                        example: platform-demo
+                      version:
+                        type: string
+                        example: "1.0.0"
+                      commit:
+                        type: string
+                        example: abc1234
+                      hostname:
+                        type: string
+                      go_version:
+                        type: string
+                        example: go1.25.0
+                      now:
+                        type: string
+                        format: date-time
+      /healthz:
+        get:
+          summary: Liveness probe
+          operationId: healthz
+          responses:
+            "200":
+              description: ok
+      /readyz:
+        get:
+          summary: Readiness probe
+          operationId: readyz
+          responses:
+            "200":
+              description: ready
