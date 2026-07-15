@@ -168,6 +168,20 @@ jobs:
           curl -sSL https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh | bash
           sudo mv kustomize /usr/local/bin/
 
+      - name: Verify image exists in Harbor before gitops bump
+        run: |
+          TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          URL="https://${{ env.REGISTRY }}/v2/${{ env.IMAGE_NAME }}/manifests/${TAG}"
+          STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
+            --cacert /usr/local/share/ca-certificates/minicloud-ca.crt \
+            -H "Authorization: Basic $(echo -n 'admin:${{ secrets.HARBOR_PASSWORD }}' | base64)" \
+            "$URL")
+          if [ "$STATUS" != "200" ]; then
+            echo "Image $TAG not found in Harbor (HTTP $STATUS) — aborting gitops bump"
+            exit 1
+          fi
+          echo "Image $TAG confirmed in Harbor (HTTP $STATUS)"
+
       - name: Bump image tag in overlay and push signed commit
         run: |
           cd "${{ steps.overlay.outputs.path }}"
