@@ -145,7 +145,7 @@ jobs:
         id: overlay
         run: |
           case "${{ needs.build-and-push.outputs.branch }}" in
-            main)    echo "path=services/platform-demo/overlays/prod" >> $GITHUB_OUTPUT ;;
+            main)    echo "path=services/platform-demo/overlays/dev" >> $GITHUB_OUTPUT ;;
             staging) echo "path=services/platform-demo/overlays/staging" >> $GITHUB_OUTPUT ;;
             dev)     echo "path=services/platform-demo/overlays/dev" >> $GITHUB_OUTPUT ;;
           esac
