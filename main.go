@@ -104,6 +104,17 @@ func handleReadyz(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte("ready\n"))
 }
 
+// newHandler builds the full HTTP handler tree. Extracted from main so
+// integration tests can call it without starting a real listener.
+func newHandler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", instrument("/", handleRoot))
+	mux.HandleFunc("/healthz", instrument("/healthz", handleHealthz))
+	mux.HandleFunc("/readyz", instrument("/readyz", handleReadyz))
+	mux.Handle("/metrics", promhttp.Handler())
+	return otelhttp.NewHandler(mux, "platform-demo")
+}
+
 func main() {
 	ctx := context.Background()
 	shutdown := initTracer(ctx)
@@ -113,19 +124,10 @@ func main() {
 	if port == "" {
 		port = "9898"
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", instrument("/", handleRoot))
-	mux.HandleFunc("/healthz", instrument("/healthz", handleHealthz))
-	mux.HandleFunc("/readyz", instrument("/readyz", handleReadyz))
-	mux.Handle("/metrics", promhttp.Handler())
 
-	// otelhttp creates a root span per request, propagates W3C TraceContext from
-	// inbound headers, and puts the span on the context so instrument() can
-	// attach the trace ID as a Prometheus exemplar.
-	handler := otelhttp.NewHandler(mux, "platform-demo")
 	addr := ":" + port
 	log.Printf("platform-demo %s (%s) listening on %s", version, commit, addr)
-	if err := http.ListenAndServe(addr, handler); err != nil {
+	if err := http.ListenAndServe(addr, newHandler()); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
