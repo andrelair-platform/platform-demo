@@ -12,6 +12,7 @@ env:
   GITOPS_REPO: andrelair-platform/minicloud-gitops
 
 jobs:
+  # ── 1. Unit tests + static security ────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     steps:
@@ -22,7 +23,7 @@ jobs:
           go-version: '1.25'
           cache: true
 
-      - name: Run tests
+      - name: Run unit tests
         run: go test -v -count=1 ./...
 
       - name: Vulnerability check (govulncheck)
@@ -35,6 +36,7 @@ jobs:
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           gosec -severity high -confidence medium ./...
 
+  # ── 2. Build, scan, sign ────────────────────────────────────────────────────
   build-and-push:
     needs: test
     if: github.event_name == 'push'
@@ -74,7 +76,6 @@ jobs:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           tags: tag:ci
 
-      # ── Trust the minicloud self-signed CA so Docker accepts Harbor TLS ────
       - name: Trust minicloud CA
         run: |
           sudo mkdir -p /etc/docker/certs.d/${{ env.REGISTRY }}
@@ -147,6 +148,7 @@ jobs:
             --type cyclonedx \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
 
+  # ── 3. GitOps bump ──────────────────────────────────────────────────────────
   bump-gitops:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -233,3 +235,220 @@ jobs:
           gh pr merge "${BRANCH}" \
             --repo ${{ env.GITOPS_REPO }} \
             --admin --merge --delete-branch
+
+  # ── 4. Post-deploy smoke test + integration tests ───────────────────────────
+  # Runs only on main branch pushes (dev overlay auto-syncs).
+  # Waits for Argo Rollout to reach Healthy, then does an HTTP probe via a
+  # transient curl pod in the cluster. Uses the static-cert kubeconfig stored
+  # in KUBE_CONFIG_BASE64 (org secret) so no OIDC browser flow is needed.
+  smoke-test:
+    needs: bump-gitops
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA
+        run: |
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Set up kubectl
+        run: |
+          curl -sSL "https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl" -o kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_BASE64 }}" | base64 -d > ~/.kube/config
+
+      - name: Wait for Rollout to reach Healthy (max 5 min)
+        run: |
+          echo "Waiting for ArgoCD to pick up the new image tag..."
+          sleep 40
+          for i in $(seq 1 27); do
+            PHASE=$(kubectl get rollout platform-demo -n platform-demo-dev \
+              -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+            echo "[$i/27] phase=${PHASE}"
+            if [ "$PHASE" = "Healthy" ]; then
+              echo "Rollout is Healthy"
+              exit 0
+            fi
+            if [ "$PHASE" = "Degraded" ]; then
+              echo "Rollout is Degraded — aborting"
+              kubectl argo rollouts logs platform-demo -n platform-demo-dev --tail 50 || true
+              exit 1
+            fi
+            sleep 10
+          done
+          echo "Timeout after 5 min waiting for Healthy"
+          kubectl describe rollout platform-demo -n platform-demo-dev || true
+          exit 1
+
+      - name: HTTP smoke probe (curl pod in cluster)
+        run: |
+          kubectl run smoke-${{ github.run_id }} \
+            --image=curlimages/curl:8 \
+            --restart=Never \
+            --rm \
+            -n platform-demo-dev \
+            --timeout=30s \
+            -- -sf --max-time 5 http://platform-demo:9898/healthz
+          echo "Smoke probe: /healthz OK"
+
+          kubectl run smoke-root-${{ github.run_id }} \
+            --image=curlimages/curl:8 \
+            --restart=Never \
+            --rm \
+            -n platform-demo-dev \
+            --timeout=30s \
+            -- -sf --max-time 5 -o /dev/null -w "%{http_code}" http://platform-demo:9898/ \
+            | grep -q "200"
+          echo "Smoke probe: / OK"
+
+      - name: Run integration tests against dev
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.25'
+          cache: true
+
+      - name: Integration tests (port-forward → local)
+        run: |
+          kubectl port-forward svc/platform-demo 9898:9898 -n platform-demo-dev &
+          PF_PID=$!
+          sleep 3
+          go test -tags integration -v -count=1 -timeout=60s ./...
+          kill $PF_PID || true
+
+  # ── 5. k6 load test against dev ─────────────────────────────────────────────
+  load-test:
+    needs: smoke-test
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA
+        run: |
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Set up kubectl
+        run: |
+          curl -sSL "https://dl.k8s.io/release/v1.36.2/bin/linux/amd64/kubectl" -o kubectl
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG_BASE64 }}" | base64 -d > ~/.kube/config
+
+      - name: Install k6
+        run: |
+          sudo gpg -k
+          sudo gpg --no-default-keyring \
+            --keyring /usr/share/keyrings/k6-archive-keyring.gpg \
+            --keyserver hkp://keyserver.ubuntu.com:80 \
+            --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D69
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
+            | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update -q && sudo apt-get install -q k6
+
+      - name: Port-forward dev service
+        run: |
+          kubectl port-forward svc/platform-demo 9898:9898 -n platform-demo-dev &
+          echo "PF_PID=$!" >> $GITHUB_ENV
+          sleep 3
+
+      - name: Run k6 smoke load test
+        run: k6 run k6/smoke.js
+
+      - name: Teardown port-forward
+        if: always()
+        run: kill $PF_PID || true
+
+  # ── 6. Auto-promote to staging (main branch only, after load test) ─────────
+  promote-staging:
+    needs: load-test
+    if: github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA
+        run: |
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Checkout minicloud-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Install kustomize
+        uses: imranismail/setup-kustomize@v3
+        with:
+          kustomize-version: "5.6.0"
+
+      - name: Open staging promotion PR
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          SHA: ${{ needs.build-and-push.outputs.image_tag }}
+        run: |
+          # Re-derive tag from the image that just passed smoke + load test
+          SHA="${{ needs.build-and-push.outputs.image_tag }}"
+          BRANCH="ci/promote-platform-demo-staging-${SHA}"
+          git checkout -b "${BRANCH}"
+          cd services/platform-demo/overlays/staging
+          kustomize edit set image \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHA}
+          cd -
+          git add services/platform-demo/overlays/staging/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Staging already at ${SHA} — nothing to promote"
+            exit 0
+          fi
+          git commit -S -m "ci(platform-demo): promote ${SHA} to staging"
+          git push origin "${BRANCH}"
+          gh pr create \
+            --repo ${{ env.GITOPS_REPO }} \
+            --base main \
+            --head "${BRANCH}" \
+            --title "promote(platform-demo): ${SHA} → staging" \
+            --body "$(cat <<'BODY'
+Auto-generated staging promotion after:
+- Unit tests passed
+- Container image built, Trivy scanned, Cosign signed
+- Argo Rollout reached Healthy in dev
+- HTTP smoke probes passed
+- k6 load test passed (p95 < 500ms, error rate < 1%)
+
+**Merge this PR to deploy to staging. Manual ArgoCD sync required after merge.**
+BODY
+)"
+          echo "Staging promotion PR created for ${SHA}"
