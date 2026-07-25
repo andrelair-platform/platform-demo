@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Build-time metadata. Overridden via -ldflags at build:
@@ -49,9 +52,20 @@ func instrument(pattern string, h http.HandlerFunc) http.HandlerFunc {
 		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
 		start := time.Now()
 		h(sw, r)
+		duration := time.Since(start).Seconds()
 		code := strconv.Itoa(sw.code)
 		httpRequestsTotal.WithLabelValues(r.Method, pattern, code).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, pattern, code).Observe(time.Since(start).Seconds())
+		obs := httpRequestDuration.WithLabelValues(r.Method, pattern, code)
+		// Gap E: embed trace ID as exemplar so Grafana can link histogram samples
+		// to Tempo traces. otelhttp sets a span on the context before calling this
+		// handler, so SpanFromContext is valid when traces are flowing.
+		if sc := trace.SpanFromContext(r.Context()).SpanContext(); sc.IsValid() {
+			if eo, ok := obs.(prometheus.ExemplarObserver); ok {
+				eo.ObserveWithExemplar(duration, prometheus.Labels{"traceID": sc.TraceID().String()})
+				return
+			}
+		}
+		obs.Observe(duration)
 	}
 }
 
@@ -91,6 +105,10 @@ func handleReadyz(w http.ResponseWriter, _ *http.Request) {
 }
 
 func main() {
+	ctx := context.Background()
+	shutdown := initTracer(ctx)
+	defer shutdown(ctx)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "9898"
@@ -100,9 +118,14 @@ func main() {
 	mux.HandleFunc("/healthz", instrument("/healthz", handleHealthz))
 	mux.HandleFunc("/readyz", instrument("/readyz", handleReadyz))
 	mux.Handle("/metrics", promhttp.Handler())
+
+	// otelhttp creates a root span per request, propagates W3C TraceContext from
+	// inbound headers, and puts the span on the context so instrument() can
+	// attach the trace ID as a Prometheus exemplar.
+	handler := otelhttp.NewHandler(mux, "platform-demo")
 	addr := ":" + port
 	log.Printf("platform-demo %s (%s) listening on %s", version, commit, addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
