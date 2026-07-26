@@ -326,9 +326,24 @@ jobs:
           go test -tags integration -v -count=1 -timeout=60s ./...
           kill $PF_PID || true
 
-  # ── 5. k6 load test against dev ─────────────────────────────────────────────
-  load-test:
-    needs: smoke-test
+  # ── 5. k6 canary load injection (parallel with smoke-test) ──────────────────
+  # Fires immediately after bump-gitops so k6 traffic is flowing DURING the
+  # Argo Rollouts AnalysisRun. The analysis step (inline in the canary strategy)
+  # has initialDelay: 60s, ensuring ≥2 Prometheus recording intervals of real
+  # traffic exist before the first gate check executes.
+  #
+  # Timeline:
+  #   t=0   bump-gitops merges
+  #   t~30  ArgoCD syncs new image tag, canary pods start
+  #   t~40  port-forward ready, k6 starts (after 30s sleep below)
+  #   t~60  canary 30s pause ends, AnalysisRun created
+  #   t~120 first gate check fires (initialDelay: 60s) — k6 has ~80s of data
+  #   t~270 analysis completes (5 checks × 30s = 150s + 60s delay)
+  #   t~300 setWeight 100, Rollout Healthy
+  #
+  # promote-staging depends on BOTH canary-load AND smoke-test passing.
+  canary-load:
+    needs: bump-gitops
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
@@ -365,22 +380,24 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/k6.list
           sudo apt-get update -q && sudo apt-get install -q k6
 
-      - name: Port-forward dev service
+      - name: Wait for ArgoCD sync then port-forward
         run: |
+          echo "Waiting 30s for ArgoCD to pick up the new image tag..."
+          sleep 30
           kubectl port-forward svc/platform-demo 9898:9898 -n platform-demo-dev &
           echo "PF_PID=$!" >> $GITHUB_ENV
           sleep 3
 
-      - name: Run k6 smoke load test
-        run: k6 run k6/smoke.js
+      - name: Run k6 canary load test (5 min — covers analysis window)
+        run: k6 run -e CANARY_DURATION=5m k6/smoke.js
 
       - name: Teardown port-forward
         if: always()
         run: kill $PF_PID || true
 
-  # ── 6. Auto-promote to staging (main branch only, after load test) ─────────
+  # ── 6. Auto-promote to staging (main branch only, after both gates pass) ────
   promote-staging:
-    needs: load-test
+    needs: [smoke-test, canary-load]
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
