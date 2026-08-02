@@ -1,0 +1,254 @@
+name: Preview
+
+# Deploys an ephemeral ArgoCD Application to preview-pd-<number> namespace
+# whenever a PR carries the "preview" label.
+#
+# Lifecycle:
+#   labeled:preview / opened / synchronize  →  build pr-<n>-<sha> image, push Application
+#   unlabeled:preview / closed              →  remove Application (finalizer prunes namespace)
+#
+# ArgoCD root-app recurse:true watches apps/previews/ in minicloud-gitops.
+# Any .yaml file created there is auto-discovered and synced within ~30s.
+# The resources-finalizer.argocd.argoproj.io on the Application deletes the
+# namespace and all managed resources when the Application is deleted.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled, closed]
+
+env:
+  REGISTRY: harbor.10.0.0.200.nip.io
+  IMAGE_NAME: library/platform-demo
+  GITOPS_REPO: andrelair-platform/minicloud-gitops
+
+jobs:
+  # ── Build the PR image and push the ArgoCD Application to gitops ─────────────
+  deploy-preview:
+    if: >
+      (github.event.action == 'labeled' && github.event.label.name == 'preview') ||
+      (
+        (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'reopened') &&
+        contains(github.event.pull_request.labels.*.name, 'preview')
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Compute preview image tag
+        id: meta
+        run: |
+          SHA=$(git rev-parse --short HEAD)
+          PR=${{ github.event.pull_request.number }}
+          echo "image_tag=pr-${PR}-${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA
+        run: |
+          sudo mkdir -p /etc/docker/certs.d/${{ env.REGISTRY }}
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" | sudo tee /etc/docker/certs.d/${{ env.REGISTRY }}/ca.crt
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Login to Harbor
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.HARBOR_USER }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+
+      - uses: docker/setup-buildx-action@v4
+        with:
+          buildkitd-config-inline: |
+            [registry."harbor.10.0.0.200.nip.io"]
+              insecure = true
+
+      - name: Build and push preview image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Containerfile
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.image_tag }}
+          build-args: |
+            VERSION=pr-${{ github.event.pull_request.number }}
+            COMMIT=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Connect to Tailscale (gitops step)
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA (gitops step)
+        run: |
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Checkout minicloud-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Write ArgoCD Application manifest and open PR
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          IMAGE_TAG: ${{ steps.meta.outputs.image_tag }}
+        run: |
+          APP_NAME="preview-pd-${PR_NUMBER}"
+          BRANCH="preview/pd-${PR_NUMBER}"
+          git checkout -b "${BRANCH}" 2>/dev/null || git checkout "${BRANCH}"
+          mkdir -p apps/previews
+
+          python3 - "${PR_NUMBER}" "${IMAGE_TAG}" "${{ env.REGISTRY }}" "${{ env.IMAGE_NAME }}" <<'PYEOF'
+          import sys, pathlib, textwrap
+
+          pr, tag, registry, image = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+          app_name = f"preview-pd-{pr}"
+          ns = f"preview-pd-{pr}"
+
+          manifest = textwrap.dedent(f"""\
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: {app_name}
+            namespace: argocd
+            finalizers:
+              - resources-finalizer.argocd.argoproj.io
+          spec:
+            project: minicloud-platform
+            source:
+              repoURL: https://github.com/andrelair-platform/minicloud-gitops.git
+              targetRevision: main
+              path: services/platform-demo/minicloud-1/preview
+              kustomize:
+                images:
+                  - {registry}/{image}:{tag}
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: {ns}
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+                - ServerSideApply=true
+                - ServerSideDiff=true
+                - RespectIgnoreDifferences=true
+                - SkipDryRunOnMissingResource=true
+            ignoreDifferences:
+              - group: argoproj.io
+                kind: Rollout
+                jqPathExpressions:
+                  - .spec.replicas
+                  - .spec.template.metadata.annotations
+          """)
+
+          pathlib.Path(f"apps/previews/{app_name}.yaml").write_text(manifest)
+          print(f"Wrote apps/previews/{app_name}.yaml (image: {registry}/{image}:{tag})")
+          PYEOF
+
+          git add "apps/previews/${APP_NAME}.yaml"
+          if git diff --cached --quiet; then
+            echo "No change — preview-pd-${PR_NUMBER} already at ${IMAGE_TAG}"
+            exit 0
+          fi
+          git commit -S -m "preview(platform-demo): deploy pr-${PR_NUMBER} at ${IMAGE_TAG}"
+          git push origin "${BRANCH}"
+          EXISTING=$(gh pr list --repo "${{ env.GITOPS_REPO }}" --head "${BRANCH}" --json number --jq '.[0].number')
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --repo "${{ env.GITOPS_REPO }}" \
+              --base main \
+              --head "${BRANCH}" \
+              --title "preview(platform-demo): pr-${PR_NUMBER}" \
+              --body "Preview environment for #${PR_NUMBER}: ${PR_TITLE}
+
+          Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}\`
+          Namespace: \`preview-pd-${PR_NUMBER}\`"
+          fi
+          gh pr merge "${BRANCH}" \
+            --repo "${{ env.GITOPS_REPO }}" \
+            --admin --merge --delete-branch
+
+  # ── Remove the Application manifest (ArgoCD finalizer cleans up namespace) ───
+  teardown-preview:
+    if: >
+      github.event.action == 'closed' ||
+      (github.event.action == 'unlabeled' && github.event.label.name == 'preview')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Trust minicloud CA
+        run: |
+          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
+            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
+          sudo update-ca-certificates
+
+      - name: Checkout minicloud-gitops
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ env.GITOPS_REPO }}
+          token: ${{ secrets.GITOPS_TOKEN }}
+
+      - name: Import GPG signing key
+        uses: crazy-max/ghaction-import-gpg@v7
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      - name: Remove Application and push
+        env:
+          GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          APP_FILE="apps/previews/preview-pd-${PR_NUMBER}.yaml"
+          if [ ! -f "${APP_FILE}" ]; then
+            echo "No preview manifest for pr-${PR_NUMBER} — nothing to tear down"
+            exit 0
+          fi
+
+          BRANCH="preview/pd-${PR_NUMBER}-teardown"
+          git checkout -b "${BRANCH}"
+          git rm "${APP_FILE}"
+          git commit -S -m "preview(platform-demo): teardown pr-${PR_NUMBER}"
+          git push origin "${BRANCH}"
+          gh pr create \
+            --repo "${{ env.GITOPS_REPO }}" \
+            --base main \
+            --head "${BRANCH}" \
+            --title "preview(platform-demo): teardown pr-${PR_NUMBER}" \
+            --body "Tear down preview environment for #${PR_NUMBER}."
+          gh pr merge "${BRANCH}" \
+            --repo "${{ env.GITOPS_REPO }}" \
+            --admin --merge --delete-branch

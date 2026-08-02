@@ -4,43 +4,44 @@ kind: Component
 metadata:
   name: platform-demo
   description: |
-    Phase 13 — tiny Go HTTP service used to demonstrate the full
-    minicloud CI/CD pipeline end-to-end. Source pushed → GitHub Actions
-    builds + tests + pushes to ghcr.io → CI bumps the image tag in
-    minicloud-gitops via the Contents API → ArgoCD reconciles → kubelet
-    pulls through Harbor's ghcr proxy cache (Phase 16). Total push-to-
-    live: ~3 min. Live at platform-demo.10.0.0.200.nip.io with
-    ldflags-injected git SHA in the JSON response.
+    Go HTTP service used as the reference CI/CD pipeline subject. Demonstrates
+    the full minicloud delivery path: Harbor push → Argo Rollouts canary with
+    Prometheus AnalysisTemplate gates → GitOps promotion to staging via PR →
+    ephemeral preview environments per labeled PR. Live at demo.devandre.sbs.
   annotations:
     backstage.io/source-location: url:https://github.com/andrelair-platform/platform-demo
     github.com/project-slug: andrelair-platform/platform-demo
-    argocd/app-name: platform-demo
+    argocd/app-name: platform-demo-dev
     backstage.io/kubernetes-id: platform-demo
-    prometheus.io/rule: http_request_duration_seconds_count{namespace="gitops-demo"}
-    grafana/dashboard-selector: namespace=gitops-demo
+    prometheus.io/rule: http_request_duration_seconds_count{namespace="platform-demo-dev"}
+    grafana/dashboard-selector: namespace=platform-demo-dev
     plane.io/project-id: "PT"
   tags:
     - go
     - service
     - demo
-    - phase-13
     - cicd
+    - argo-rollouts
+    - preview-environments
   links:
-    - url: https://platform-demo.10.0.0.200.nip.io/
-      title: Live service (returns JSON with git SHA)
+    - url: https://demo.devandre.sbs
+      title: Live service (public, via Cloudflare Tunnel)
       icon: web
-    - url: https://andrelair-platform.github.io/minicloud-platform-docs/platform-roadmap/phase-13-cicd
-      title: Phase 13 documentation
-      icon: docs
-    - url: https://argocd.10.0.0.200.nip.io/applications/platform-demo
-      title: ArgoCD Application
+    - url: https://argocd.10.0.0.200.nip.io/applications/platform-demo-dev
+      title: ArgoCD — dev
       icon: dashboard
+    - url: https://argocd.10.0.0.200.nip.io/applications/platform-demo-staging
+      title: ArgoCD — staging
+      icon: dashboard
+    - url: https://argocd.10.0.0.200.nip.io/applications/platform-demo
+      title: ArgoCD — prod
+      icon: dashboard
+    - url: https://harbor.10.0.0.200.nip.io/harbor/projects/1/repositories/platform-demo
+      title: Harbor registry
+      icon: image
     - url: https://github.com/andrelair-platform/platform-demo
       title: Source code
       icon: github
-    - url: https://github.com/andrelair-platform/platform-demo/pkgs/container/platform-demo
-      title: Container images on ghcr.io
-      icon: image
 spec:
   type: service
   lifecycle: production
@@ -76,8 +77,8 @@ spec:
     servers:
       - url: https://demo.devandre.sbs
         description: Public (via Cloudflare Tunnel)
-      - url: http://platform-demo.gitops-demo.svc.cluster.local:9898
-        description: In-cluster
+      - url: http://platform-demo.platform-demo-dev.svc.cluster.local:9898
+        description: In-cluster (dev)
     paths:
       /:
         get:
