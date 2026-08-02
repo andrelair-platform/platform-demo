@@ -157,9 +157,9 @@ jobs:
         id: overlay
         run: |
           case "${{ needs.build-and-push.outputs.branch }}" in
-            main)    echo "path=services/platform-demo/overlays/dev" >> $GITHUB_OUTPUT ;;
-            staging) echo "path=services/platform-demo/overlays/staging" >> $GITHUB_OUTPUT ;;
-            dev)     echo "path=services/platform-demo/overlays/dev" >> $GITHUB_OUTPUT ;;
+            main)    echo "path=services/platform-demo/minicloud-1/dev" >> $GITHUB_OUTPUT ;;
+            staging) echo "path=services/platform-demo/minicloud-1/staging" >> $GITHUB_OUTPUT ;;
+            dev)     echo "path=services/platform-demo/minicloud-1/dev" >> $GITHUB_OUTPUT ;;
           esac
 
       - name: Connect to Tailscale
@@ -441,11 +441,11 @@ jobs:
           SHA="${{ needs.build-and-push.outputs.image_tag }}"
           BRANCH="ci/promote-platform-demo-staging-${SHA}"
           git checkout -b "${BRANCH}"
-          cd services/platform-demo/overlays/staging
+          cd services/platform-demo/minicloud-1/staging
           kustomize edit set image \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHA}
           cd -
-          git add services/platform-demo/overlays/staging/kustomization.yaml
+          git add services/platform-demo/minicloud-1/staging/kustomization.yaml
           if git diff --cached --quiet; then
             echo "Staging already at ${SHA} — nothing to promote"
             exit 0
