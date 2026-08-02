@@ -397,7 +397,7 @@ jobs:
 
   # ── 6. Auto-promote to staging (main branch only, after both gates pass) ────
   promote-staging:
-    needs: [smoke-test, canary-load]
+    needs: [smoke-test, canary-load, build-and-push]
     if: github.ref_name == 'main'
     runs-on: ubuntu-latest
     steps:
