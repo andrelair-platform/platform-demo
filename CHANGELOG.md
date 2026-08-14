@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.2](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.1...platform-demo-v0.1.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **website:** correct sidebars.ts brace syntax ([9e566e3](https://github.com/andrelair-platform/platform-demo/commit/9e566e3798237abff142dc740d6ad2c14c90f1b2))
+
 ## [0.1.1](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.0...platform-demo-v0.1.1) (2026-08-14)
 
 
