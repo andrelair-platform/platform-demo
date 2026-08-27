@@ -1,4 +1,7 @@
 name: CI
+# Registry auth (org secrets): HARBOR_USER/HARBOR_PASSWORD (robot$ci) for dev images
+# in Harbor; GITHUB_TOKEN for prod images in ghcr.io (public). Keep the Harbor robot
+# secret in sync with Vault secret/platform/harbor -> robot-ci-secret.
 
 on:
   push:
