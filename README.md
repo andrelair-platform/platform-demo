@@ -83,7 +83,7 @@ curl http://localhost:9898/ | jq
 docker build \
   --build-arg VERSION="$(git rev-parse --short HEAD)" \
   --build-arg COMMIT="$(git rev-parse HEAD)" \
-  -f Containerfile \
+  -f Dockerfile \
   -t platform-demo:dev .
 
 docker run -p 9898:9898 platform-demo:dev
