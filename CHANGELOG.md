@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.2](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.1...platform-demo-v0.1.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **deps:** bump grpc to v1.82.1 (govulncheck GO-2026-6061) ([edd28ac](https://github.com/andrelair-platform/platform-demo/commit/edd28ac8800c5e1e29ef7fa2e998622e3d107a0c))
+* **deps:** bump grpc to v1.82.1 (govulncheck GO-2026-6061) ([#34](https://github.com/andrelair-platform/platform-demo/issues/34)) ([8989923](https://github.com/andrelair-platform/platform-demo/commit/8989923d7970df0da0a4468b2cc5d7be31cb29c0))
+* **website:** correct sidebars.ts brace syntax ([9e566e3](https://github.com/andrelair-platform/platform-demo/commit/9e566e3798237abff142dc740d6ad2c14c90f1b2))
+
 ## [0.1.1](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.0...platform-demo-v0.1.1) (2026-08-14)
 
 
