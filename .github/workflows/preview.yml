@@ -123,10 +123,14 @@ jobs:
           pr, tag, registry, image = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           app_name = f"preview-pd-{pr}"
           ns = f"preview-pd-{pr}"
-          # nip.io DASH form for the IP (10-0-0-200), not dotted: the "-<pr>" numeric suffix on the
-          # label collides with nip.io's dotted-octet parsing (demo-pr-49.10.0.0.200 -> it reads the
-          # IP as 49.10.0.0). Dash form is unambiguous -> demo-pr-<n>.10-0-0-200.nip.io -> 10.0.0.200.
-          host = f"demo-pr-{pr}.10-0-0-200.nip.io"
+          # Host must satisfy BOTH nip.io DNS and the Vault-PKI minicloud-CA issuer:
+          #  - dotted IP 10.0.0.200 (the Vault PKI role's allowed_domains has 10.0.0.200.nip.io, NOT the
+          #    dash form 10-0-0-200.nip.io -> Vault refuses to sign a dash-domain cert);
+          #  - the single label must NOT end in a digit adjacent to the IP, or nip.io misparses the octets
+          #    (demo-pr-49.10.0.0.200 -> 49.10.0.0). Putting the number mid-label fixes it.
+          #  -> pr<n>-preview.10.0.0.200.nip.io : one label, dotted IP (matches *.10.0.0.200.nip.io like
+          #     every other app), resolves to 10.0.0.200.
+          host = f"pr{pr}-preview.10.0.0.200.nip.io"
 
           # The repo is Helm-only (no kustomize) — render the platform-demo wrapper chart with the
           # simplified values-preview.yaml overlay + a per-PR valuesObject (image tag, host, cert).
