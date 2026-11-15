@@ -84,19 +84,8 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Connect to Tailscale (gitops step)
-        uses: tailscale/github-action@v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
-          tags: tag:ci
-
-      - name: Trust minicloud CA (gitops step)
-        run: |
-          echo "${{ secrets.MINICLOUD_CA_CERT }}" \
-            | sudo tee /usr/local/share/ca-certificates/minicloud-ca.crt
-          sudo update-ca-certificates
-
+      # NB: the gitops steps below talk to GitHub.com (public) only — no Tailscale/CA needed.
+      # (Re-running tailscale/github-action here fails with "tailscaled: Text file busy".)
       - name: Checkout minicloud-gitops
         uses: actions/checkout@v7
         with:
