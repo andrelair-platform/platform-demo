@@ -165,3 +165,5 @@ kubectl --context minicloud argo rollouts status platform-demo -n gitops-demo
 ## License
 
 [MIT](LICENSE) © andrelair-platform
+
+<!-- preview-env e2e smoke 20261115T134156Z -->
