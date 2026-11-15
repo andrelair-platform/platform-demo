@@ -117,7 +117,10 @@ jobs:
           pr, tag, registry, image = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           app_name = f"preview-pd-{pr}"
           ns = f"preview-pd-{pr}"
-          host = f"demo-pr-{pr}.10.0.0.200.nip.io"
+          # nip.io DASH form for the IP (10-0-0-200), not dotted: the "-<pr>" numeric suffix on the
+          # label collides with nip.io's dotted-octet parsing (demo-pr-49.10.0.0.200 -> it reads the
+          # IP as 49.10.0.0). Dash form is unambiguous -> demo-pr-<n>.10-0-0-200.nip.io -> 10.0.0.200.
+          host = f"demo-pr-{pr}.10-0-0-200.nip.io"
 
           # The repo is Helm-only (no kustomize) — render the platform-demo wrapper chart with the
           # simplified values-preview.yaml overlay + a per-PR valuesObject (image tag, host, cert).
