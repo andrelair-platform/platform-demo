@@ -128,7 +128,10 @@ jobs:
           pr, tag, registry, image = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
           app_name = f"preview-pd-{pr}"
           ns = f"preview-pd-{pr}"
+          host = f"demo-pr-{pr}.10.0.0.200.nip.io"
 
+          # The repo is Helm-only (no kustomize) — render the platform-demo wrapper chart with the
+          # simplified values-preview.yaml overlay + a per-PR valuesObject (image tag, host, cert).
           manifest = textwrap.dedent(f"""\
           apiVersion: argoproj.io/v1alpha1
           kind: Application
@@ -142,10 +145,24 @@ jobs:
             source:
               repoURL: https://github.com/andrelair-platform/minicloud-gitops.git
               targetRevision: main
-              path: services/platform-demo/minicloud-1/preview
-              kustomize:
-                images:
-                  - {registry}/{image}:{tag}
+              path: services/platform-demo/helm
+              helm:
+                releaseName: platform-demo
+                valueFiles:
+                  - values-preview.yaml
+                valuesObject:
+                  minicloud-app-deployment:
+                    image:
+                      tag: "{tag}"
+                    ingress:
+                      hosts:
+                        - {host}
+                      tls:
+                        secretName: {app_name}-tls
+                  tlsCert:
+                    name: {app_name}-tls
+                    secretName: {app_name}-tls
+                    dnsName: {host}
             destination:
               server: https://kubernetes.default.svc
               namespace: {ns}
@@ -159,12 +176,6 @@ jobs:
                 - ServerSideDiff=true
                 - RespectIgnoreDifferences=true
                 - SkipDryRunOnMissingResource=true
-            ignoreDifferences:
-              - group: argoproj.io
-                kind: Rollout
-                jqPathExpressions:
-                  - .spec.replicas
-                  - .spec.template.metadata.annotations
           """)
 
           pathlib.Path(f"apps/previews/{app_name}.yaml").write_text(manifest)
