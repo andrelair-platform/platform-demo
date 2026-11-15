@@ -21,6 +21,12 @@ env:
   IMAGE_NAME: library/platform-demo
   GITOPS_REPO: andrelair-platform/minicloud-gitops
 
+# Serialise per-PR runs: a `labeled` + `synchronize` (or rapid pushes) must not race on the
+# per-PR preview/pd-<n> branch (non-fast-forward push). One run per PR; newest wins.
+concurrency:
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   # ── Build the PR image and push the ArgoCD Application to gitops ─────────────
   deploy-preview:
@@ -180,7 +186,9 @@ jobs:
             exit 0
           fi
           git commit -S -m "preview(platform-demo): deploy pr-${PR_NUMBER} at ${IMAGE_TAG}"
-          git push origin "${BRANCH}"
+          # Force-push: the preview branch is a throwaway, fully regenerated each run — if it exists
+          # from a prior run its history may diverge (non-fast-forward). Force is safe (not main).
+          git push --force origin "${BRANCH}"
           EXISTING=$(gh pr list --repo "${{ env.GITOPS_REPO }}" --head "${BRANCH}" --json number --jq '.[0].number')
           if [ -z "$EXISTING" ]; then
             gh pr create \
@@ -193,9 +201,23 @@ jobs:
           Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${IMAGE_TAG}\`
           Namespace: \`preview-pd-${PR_NUMBER}\`"
           fi
-          gh pr merge "${BRANCH}" \
-            --repo "${{ env.GITOPS_REPO }}" \
-            --admin --merge --delete-branch
+          # Wait for the gitops required checks, then squash-merge via the authoritative REST endpoint
+          # (apps/previews/ is CODEOWNERS-exempt, so no review/--admin needed; merge-gate etc. still gate).
+          # gh pr merge refuses client-side on a stale BLOCKED state; REST re-evaluates server-side.
+          PR_NUM=$(gh pr list --repo "${{ env.GITOPS_REPO }}" --head "${BRANCH}" --json number --jq '.[0].number')
+          for attempt in $(seq 1 24); do
+            STATE=$(gh pr view "${PR_NUM}" --repo "${{ env.GITOPS_REPO }}" --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null || echo UNKNOWN)
+            if [ "${STATE}" = "BEHIND" ]; then
+              gh pr update-branch "${PR_NUM}" --repo "${{ env.GITOPS_REPO }}" >/dev/null 2>&1 || true
+            elif [ "${STATE}" = "CLEAN" ] && gh api -X PUT "repos/${{ env.GITOPS_REPO }}/pulls/${PR_NUM}/merge" -f merge_method=squash >/dev/null 2>&1; then
+              echo "Merged gitops preview PR #${PR_NUM}"
+              gh api -X DELETE "repos/${{ env.GITOPS_REPO }}/git/refs/heads/${BRANCH}" >/dev/null 2>&1 || true
+              exit 0
+            fi
+            echo "attempt ${attempt}: gitops PR #${PR_NUM} mergeState=${STATE}; retry in 15s"
+            sleep 15
+          done
+          echo "::error::gitops preview PR #${PR_NUM} never reached a mergeable state"; exit 1
 
   # ── Remove the Application manifest (ArgoCD finalizer cleans up namespace) ───
   teardown-preview:
@@ -242,16 +264,31 @@ jobs:
           fi
 
           BRANCH="preview/pd-${PR_NUMBER}-teardown"
-          git checkout -b "${BRANCH}"
+          git checkout -B "${BRANCH}"
           git rm "${APP_FILE}"
           git commit -S -m "preview(platform-demo): teardown pr-${PR_NUMBER}"
-          git push origin "${BRANCH}"
-          gh pr create \
-            --repo "${{ env.GITOPS_REPO }}" \
-            --base main \
-            --head "${BRANCH}" \
-            --title "preview(platform-demo): teardown pr-${PR_NUMBER}" \
-            --body "Tear down preview environment for #${PR_NUMBER}."
-          gh pr merge "${BRANCH}" \
-            --repo "${{ env.GITOPS_REPO }}" \
-            --admin --merge --delete-branch
+          git push --force origin "${BRANCH}"
+          EXISTING=$(gh pr list --repo "${{ env.GITOPS_REPO }}" --head "${BRANCH}" --json number --jq '.[0].number')
+          if [ -z "$EXISTING" ]; then
+            gh pr create \
+              --repo "${{ env.GITOPS_REPO }}" \
+              --base main \
+              --head "${BRANCH}" \
+              --title "preview(platform-demo): teardown pr-${PR_NUMBER}" \
+              --body "Tear down preview environment for #${PR_NUMBER}."
+          fi
+          # Same robust path as deploy: wait for checks, squash-merge via REST (no --admin needed).
+          PR_NUM=$(gh pr list --repo "${{ env.GITOPS_REPO }}" --head "${BRANCH}" --json number --jq '.[0].number')
+          for attempt in $(seq 1 24); do
+            STATE=$(gh pr view "${PR_NUM}" --repo "${{ env.GITOPS_REPO }}" --json mergeStateStatus --jq .mergeStateStatus 2>/dev/null || echo UNKNOWN)
+            if [ "${STATE}" = "BEHIND" ]; then
+              gh pr update-branch "${PR_NUM}" --repo "${{ env.GITOPS_REPO }}" >/dev/null 2>&1 || true
+            elif [ "${STATE}" = "CLEAN" ] && gh api -X PUT "repos/${{ env.GITOPS_REPO }}/pulls/${PR_NUM}/merge" -f merge_method=squash >/dev/null 2>&1; then
+              echo "Merged gitops teardown PR #${PR_NUM}"
+              gh api -X DELETE "repos/${{ env.GITOPS_REPO }}/git/refs/heads/${BRANCH}" >/dev/null 2>&1 || true
+              exit 0
+            fi
+            echo "attempt ${attempt}: gitops teardown PR #${PR_NUM} mergeState=${STATE}; retry in 15s"
+            sleep 15
+          done
+          echo "::error::gitops teardown PR #${PR_NUM} never reached a mergeable state"; exit 1
