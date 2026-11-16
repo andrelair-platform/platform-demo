@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.3](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.2...platform-demo-v0.1.3) (2026-11-16)
+
+
+### Bug Fixes
+
+* **preview:** drop redundant 2nd Tailscale connect (tailscaled Text file busy) ([#50](https://github.com/andrelair-platform/platform-demo/issues/50)) ([ed45430](https://github.com/andrelair-platform/platform-demo/commit/ed45430dd114498eeb9e209dfcab549b255a206b))
+* **preview:** generate a Helm Application, not the deleted kustomize path ([#46](https://github.com/andrelair-platform/platform-demo/issues/46)) ([ec9a360](https://github.com/andrelair-platform/platform-demo/commit/ec9a360d11ebaf1e36f694139fb6c11de59e5d38))
+* **preview:** make the preview pipeline reliably self-service ([#52](https://github.com/andrelair-platform/platform-demo/issues/52)) ([e32261f](https://github.com/andrelair-platform/platform-demo/commit/e32261f16fa468b8357bd7fafc0c7b0fa3a82d09))
+* **preview:** nip.io dash-form host (dotted collides with the -&lt;pr&gt; suffix) ([#51](https://github.com/andrelair-platform/platform-demo/issues/51)) ([581ea36](https://github.com/andrelair-platform/platform-demo/commit/581ea36bb5033226a4a95280ddedbdb973bf90fc))
+* **preview:** Vault-PKI-compatible host (dotted IP, number mid-label) ([#54](https://github.com/andrelair-platform/platform-demo/issues/54)) ([247d821](https://github.com/andrelair-platform/platform-demo/commit/247d8215e66019cff27ec9ea4a267ffd5d48ce35))
+
 ## [0.1.2](https://github.com/andrelair-platform/platform-demo/compare/platform-demo-v0.1.1...platform-demo-v0.1.2) (2026-09-04)
 
 
